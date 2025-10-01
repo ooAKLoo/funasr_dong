@@ -59,6 +59,7 @@ if(ENABLE_WEBSOCKET)
     FetchContent_MakeAvailable(asio)
   endif()
   include_directories(${PROJECT_SOURCE_DIR}/third_party/asio/asio/include)
+include_directories(/opt/homebrew/opt/openssl@3/include)
  
   if(NOT EXISTS ${PROJECT_SOURCE_DIR}/third_party/json/ChangeLog.md )
     FetchContent_Declare(json

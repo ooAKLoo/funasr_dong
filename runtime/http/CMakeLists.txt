@@ -116,6 +116,7 @@ endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/../onnxruntime/include/)
 include_directories(${PROJECT_SOURCE_DIR}/../onnxruntime/src)
+include_directories(/opt/homebrew/opt/boost/include)
 include_directories(${PROJECT_SOURCE_DIR}/../onnxruntime/third_party/yaml-cpp/include/)
 include_directories(${PROJECT_SOURCE_DIR}/../onnxruntime/third_party/kaldi-native-fbank)
 include_directories(${PROJECT_SOURCE_DIR}/../onnxruntime/third_party/jieba/include)

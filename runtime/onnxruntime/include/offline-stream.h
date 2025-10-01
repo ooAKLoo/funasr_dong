@@ -6,6 +6,7 @@
 #include <map>
 #include "model.h"
 #include "punc-model.h"
+#include "com-define.h"
 #include "vad-model.h"
 #if !defined(__APPLE__)
 #include "itn-model.h"
