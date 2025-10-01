@@ -83,7 +83,7 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
         std::vector<char> audio_data(file.content.begin(), file.content.end());
         
         // Extract parameters from form data
-        std::string wav_format = "pcm"; // Default to pcm since we'll extract PCM data
+        std::string wav_format = "pcm"; // Default to pcm for direct processing
         std::string wav_name = file.filename.empty() ? "audio" : file.filename;
         bool itn = true;
         int audio_fs = 16000;
@@ -113,6 +113,7 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
         
         LOG(INFO) << "Processing uploaded audio file: " << wav_name;
         LOG(INFO) << "Audio size: " << audio_data.size() << " bytes, format: " << wav_format;
+        LOG(INFO) << "Audio sample rate: " << audio_fs << "Hz";
         
         // Process hotwords if provided
         std::vector<std::vector<float>> hotwords_embedding;
@@ -125,11 +126,14 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             }
         }
         
-        // Handle WAV file format - skip WAV header if present
-        if (file.filename.find(".wav") != std::string::npos || wav_format == "wav") {
-            // Skip WAV header (typically 44 bytes) to get PCM data
+        // Handle audio format - optimize for PCM direct processing
+        if (wav_format == "pcm") {
+            // PCM data is ready to use directly - zero overhead processing
+            LOG(INFO) << "Using direct PCM data (zero-copy), size: " << audio_data.size() << " bytes";
+        } else if (file.filename.find(".wav") != std::string::npos || wav_format == "wav") {
+            // Handle legacy WAV format - extract PCM data if needed
             if (audio_data.size() > 44) {
-                // Simple WAV header check
+                // Check for WAV header
                 if (audio_data[0] == 'R' && audio_data[1] == 'I' && 
                     audio_data[2] == 'F' && audio_data[3] == 'F') {
                     LOG(INFO) << "Detected WAV file, extracting PCM data...";
@@ -144,7 +148,7 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                     }
                     audio_data.erase(audio_data.begin(), audio_data.begin() + data_start);
                     wav_format = "pcm"; // Now it's PCM data
-                    LOG(INFO) << "Extracted PCM data size: " << audio_data.size();
+                    LOG(INFO) << "Extracted PCM data size: " << audio_data.size() << " bytes";
                 }
             }
         }
@@ -161,7 +165,7 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 nullptr, 
                 hotwords_embedding,
                 audio_fs, 
-                wav_format,
+                "pcm",  // Always pass PCM format to ASR engine
                 itn, 
                 nullptr,
                 svs_lang, 
