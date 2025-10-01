@@ -135,6 +135,24 @@ class ServiceBenchmark:
         file_size = Path(audio_file).stat().st_size
         print(f"📊 文件大小: {file_size:,} bytes ({file_size/1024:.1f} KB)")
         print("-" * 60)
+
+        # 测试本地服务
+        print("\n💻 测试本地C++服务...")
+        local_times = []
+        local_results = []
+        local_success = 0
+        
+        for i in range(iterations):
+            print(f"  第 {i+1}/{iterations} 次测试...", end='', flush=True)
+            result = self.test_local_service(audio_file)
+            local_results.append(result)
+            
+            if result['success']:
+                local_success += 1
+                local_times.append(result['total_time'])
+                print(f" ✅ {result['total_time']:.1f}ms")
+            else:
+                print(f" ❌ {result['error']}")
         
         # 测试云端服务
         print("\n☁️  测试云端服务...")
@@ -150,24 +168,6 @@ class ServiceBenchmark:
             if result['success']:
                 cloud_success += 1
                 cloud_times.append(result['total_time'])
-                print(f" ✅ {result['total_time']:.1f}ms")
-            else:
-                print(f" ❌ {result['error']}")
-        
-        # 测试本地服务
-        print("\n💻 测试本地C++服务...")
-        local_times = []
-        local_results = []
-        local_success = 0
-        
-        for i in range(iterations):
-            print(f"  第 {i+1}/{iterations} 次测试...", end='', flush=True)
-            result = self.test_local_service(audio_file)
-            local_results.append(result)
-            
-            if result['success']:
-                local_success += 1
-                local_times.append(result['total_time'])
                 print(f" ✅ {result['total_time']:.1f}ms")
             else:
                 print(f" ❌ {result['error']}")

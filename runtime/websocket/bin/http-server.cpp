@@ -113,12 +113,6 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
         
         LOG(INFO) << "Processing uploaded audio file: " << wav_name;
         LOG(INFO) << "Audio size: " << audio_data.size() << " bytes, format: " << wav_format;
-        LOG(INFO) << "Recognition parameters:";
-        LOG(INFO) << "  audio_fs: " << audio_fs;
-        LOG(INFO) << "  wav_format: " << wav_format;
-        LOG(INFO) << "  itn: " << itn;
-        LOG(INFO) << "  svs_lang: " << svs_lang;
-        LOG(INFO) << "  svs_itn: " << svs_itn;
         
         // Process hotwords if provided
         std::vector<std::vector<float>> hotwords_embedding;
@@ -129,18 +123,6 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             } catch (const std::exception& e) {
                 LOG(WARNING) << "Hotwords processing failed: " << e.what();
             }
-        }
-        
-        // Create decoder handle with default values
-        float global_beam = 7.0f;
-        float lattice_beam = 6.0f; 
-        float am_scale = 10.0f;
-        LOG(INFO) << "Creating decoder handle...";
-        FUNASR_DEC_HANDLE decoder_handle = FunASRWfstDecoderInit(asr_handle, ASR_OFFLINE, global_beam, lattice_beam, am_scale);
-        if (decoder_handle == nullptr) {
-            LOG(WARNING) << "Decoder handle is null, proceeding without it";
-        } else {
-            LOG(INFO) << "Decoder handle created successfully";
         }
         
         // Handle WAV file format - skip WAV header if present
@@ -167,12 +149,9 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             }
         }
         
-        // Perform ASR inference (same parameters as WebSocket)
+        // Perform ASR inference
         FUNASR_RESULT result = nullptr;
         LOG(INFO) << "Starting ASR inference...";
-        LOG(INFO) << "  Audio data size: " << audio_data.size();
-        LOG(INFO) << "  Audio format: " << wav_format;
-        LOG(INFO) << "  Sample rate: " << audio_fs;
         try {
             result = FunOfflineInferBuffer(
                 asr_handle, 
@@ -184,7 +163,7 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 audio_fs, 
                 wav_format,
                 itn, 
-                nullptr,  // Try with nullptr for decoder_handle since it fails to create
+                nullptr,
                 svs_lang, 
                 svs_itn
             );
@@ -193,9 +172,6 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             LOG(ERROR) << "ASR inference failed: " << e.what();
             res.status = 500;
             res.set_content("{\"error\":\"ASR inference failed\"}", "application/json");
-            if (decoder_handle) {
-                FunASRWfstDecoderUninit(decoder_handle);
-            }
             return;
         }
         
@@ -229,7 +205,6 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 FunASRFreeResult(result);
                 
                 LOG(INFO) << "Recognition result: " << (asr_result.empty() ? "(empty)" : asr_result);
-                LOG(INFO) << "Response JSON: " << response.dump();
             } catch (const std::exception& e) {
                 LOG(ERROR) << "Result processing failed: " << e.what();
                 response["text"] = "";
@@ -243,11 +218,6 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             response["is_final"] = true;
             response["wav_name"] = wav_name;
         }
-        
-        // Clean up decoder handle (currently not used)
-        // if (decoder_handle) {
-        //     FunASRWfstDecoderUninit(decoder_handle);
-        // }
         
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);

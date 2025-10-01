@@ -13,7 +13,7 @@ THREAD_NUM=8
 # Model paths (same as WebSocket version)
 MODELS_BASE="/Users/yangdongju/Desktop/code_project/pc/Ohoo/python-service/models/models/iic"
 MODEL_DIR="$MODELS_BASE/SenseVoiceSmall"
-VAD_DIR="$MODELS_BASE/speech_fsmn_vad_zh-cn-16k-common-pytorch"
+VAD_DIR="$MODELS_BASE/speech_fsmn_vad_zh-cn-16k-common-onnx"
 VAD_QUANT=""
 PUNC_DIR=""
 PUNC_QUANT=""
