@@ -7,42 +7,6 @@
 #include <chrono>
 #include <algorithm>
 
-// Base64 decode implementation
-std::vector<unsigned char> HttpAsrServer::base64_decode(const std::string& encoded_string) {
-    static const std::string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    
-    std::vector<unsigned char> decoded;
-    int in_len = encoded_string.size();
-    int i = 0;
-    int bin = 0;
-    
-    while (i < in_len) {
-        int c = encoded_string[i++];
-        if (chars.find(c) != std::string::npos) {
-            bin = (bin << 6) + chars.find(c);
-        } else if (c == '=') {
-            bin = bin << 6;
-        } else {
-            continue;
-        }
-        
-        if (i % 4 == 0) {
-            decoded.push_back((bin >> 16) & 0xFF);
-            decoded.push_back((bin >> 8) & 0xFF);
-            decoded.push_back(bin & 0xFF);
-            bin = 0;
-        }
-    }
-    
-    if (encoded_string.back() == '=') {
-        decoded.pop_back();
-    }
-    if (encoded_string.size() >= 2 && encoded_string[encoded_string.size()-2] == '=') {
-        decoded.pop_back();
-    }
-    
-    return decoded;
-}
 
 void HttpAsrServer::InitAsr(const std::string& model_dir,
                            const std::string& vad_dir,
@@ -100,44 +64,55 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
     auto start_time = std::chrono::high_resolution_clock::now();
     
     try {
-        // Parse JSON request
-        if (req.body.empty()) {
+        // Check if request has file upload
+        auto file_iter = req.files.find("file");
+        if (file_iter == req.files.end()) {
             res.status = 400;
-            res.set_content("{\"error\":\"Empty request body\"}", "application/json");
+            res.set_content("{\"error\":\"Missing audio file\"}", "application/json");
             return;
         }
         
-        nlohmann::json json_req;
-        try {
-            json_req = nlohmann::json::parse(req.body);
-        } catch (const std::exception& e) {
+        const auto& file = file_iter->second;
+        if (file.content.empty()) {
             res.status = 400;
-            res.set_content("{\"error\":\"Invalid JSON\"}", "application/json");
-            LOG(ERROR) << "JSON parse error: " << e.what();
+            res.set_content("{\"error\":\"Empty audio file\"}", "application/json");
             return;
         }
         
-        // Extract parameters
-        std::string audio_base64 = json_req.value("audio", "");
-        std::string wav_format = json_req.value("wav_format", "pcm");
-        std::string wav_name = json_req.value("wav_name", "audio");
-        bool itn = json_req.value("itn", true);
-        int audio_fs = json_req.value("audio_fs", 16000);
-        std::string hotwords_str = json_req.value("hotwords", "");
-        std::string svs_lang = json_req.value("svs_lang", "auto");
-        bool svs_itn = json_req.value("svs_itn", true);
+        // Get audio data directly from uploaded file
+        std::vector<char> audio_data(file.content.begin(), file.content.end());
         
-        if (audio_base64.empty()) {
-            res.status = 400;
-            res.set_content("{\"error\":\"Missing audio data\"}", "application/json");
-            return;
+        // Extract parameters from form data
+        std::string wav_format = "pcm"; // Default to pcm since we'll extract PCM data
+        std::string wav_name = file.filename.empty() ? "audio" : file.filename;
+        bool itn = true;
+        int audio_fs = 16000;
+        std::string hotwords_str = "";
+        std::string svs_lang = "auto";
+        bool svs_itn = true;
+        
+        // Override with form parameters if provided
+        if (req.has_param("wav_format")) {
+            wav_format = req.get_param_value("wav_format");
+        }
+        if (req.has_param("itn")) {
+            itn = req.get_param_value("itn") == "true";
+        }
+        if (req.has_param("audio_fs")) {
+            audio_fs = std::stoi(req.get_param_value("audio_fs"));
+        }
+        if (req.has_param("hotwords")) {
+            hotwords_str = req.get_param_value("hotwords");
+        }
+        if (req.has_param("svs_lang")) {
+            svs_lang = req.get_param_value("svs_lang");
+        }
+        if (req.has_param("svs_itn")) {
+            svs_itn = req.get_param_value("svs_itn") == "true";
         }
         
-        // Decode base64 audio data
-        std::vector<unsigned char> audio_data_raw = base64_decode(audio_base64);
-        std::vector<char> audio_data(audio_data_raw.begin(), audio_data_raw.end());
-        
-        LOG(INFO) << "Processing audio: " << audio_data.size() << " bytes, format: " << wav_format;
+        LOG(INFO) << "Processing uploaded audio file: " << wav_name;
+        LOG(INFO) << "Audio size: " << audio_data.size() << " bytes, format: " << wav_format;
         LOG(INFO) << "Recognition parameters:";
         LOG(INFO) << "  audio_fs: " << audio_fs;
         LOG(INFO) << "  wav_format: " << wav_format;
@@ -160,10 +135,44 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
         float global_beam = 7.0f;
         float lattice_beam = 6.0f; 
         float am_scale = 10.0f;
+        LOG(INFO) << "Creating decoder handle...";
         FUNASR_DEC_HANDLE decoder_handle = FunASRWfstDecoderInit(asr_handle, ASR_OFFLINE, global_beam, lattice_beam, am_scale);
+        if (decoder_handle == nullptr) {
+            LOG(WARNING) << "Decoder handle is null, proceeding without it";
+        } else {
+            LOG(INFO) << "Decoder handle created successfully";
+        }
+        
+        // Handle WAV file format - skip WAV header if present
+        if (file.filename.find(".wav") != std::string::npos || wav_format == "wav") {
+            // Skip WAV header (typically 44 bytes) to get PCM data
+            if (audio_data.size() > 44) {
+                // Simple WAV header check
+                if (audio_data[0] == 'R' && audio_data[1] == 'I' && 
+                    audio_data[2] == 'F' && audio_data[3] == 'F') {
+                    LOG(INFO) << "Detected WAV file, extracting PCM data...";
+                    // Find "data" chunk
+                    size_t data_start = 44; // Default WAV header size
+                    for (size_t i = 36; i < audio_data.size() - 8; i++) {
+                        if (audio_data[i] == 'd' && audio_data[i+1] == 'a' && 
+                            audio_data[i+2] == 't' && audio_data[i+3] == 'a') {
+                            data_start = i + 8; // Skip "data" + size field
+                            break;
+                        }
+                    }
+                    audio_data.erase(audio_data.begin(), audio_data.begin() + data_start);
+                    wav_format = "pcm"; // Now it's PCM data
+                    LOG(INFO) << "Extracted PCM data size: " << audio_data.size();
+                }
+            }
+        }
         
         // Perform ASR inference (same parameters as WebSocket)
         FUNASR_RESULT result = nullptr;
+        LOG(INFO) << "Starting ASR inference...";
+        LOG(INFO) << "  Audio data size: " << audio_data.size();
+        LOG(INFO) << "  Audio format: " << wav_format;
+        LOG(INFO) << "  Sample rate: " << audio_fs;
         try {
             result = FunOfflineInferBuffer(
                 asr_handle, 
@@ -175,14 +184,18 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 audio_fs, 
                 wav_format,
                 itn, 
-                decoder_handle,  // Use decoder_handle like WebSocket
+                nullptr,  // Try with nullptr for decoder_handle since it fails to create
                 svs_lang, 
                 svs_itn
             );
+            LOG(INFO) << "ASR inference completed, result pointer: " << (result != nullptr ? "not null" : "null");
         } catch (const std::exception& e) {
             LOG(ERROR) << "ASR inference failed: " << e.what();
             res.status = 500;
             res.set_content("{\"error\":\"ASR inference failed\"}", "application/json");
+            if (decoder_handle) {
+                FunASRWfstDecoderUninit(decoder_handle);
+            }
             return;
         }
         
@@ -215,13 +228,15 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 
                 FunASRFreeResult(result);
                 
-                LOG(INFO) << "Recognition result: " << asr_result;
+                LOG(INFO) << "Recognition result: " << (asr_result.empty() ? "(empty)" : asr_result);
+                LOG(INFO) << "Response JSON: " << response.dump();
             } catch (const std::exception& e) {
                 LOG(ERROR) << "Result processing failed: " << e.what();
                 response["text"] = "";
                 response["error"] = "Result processing failed";
             }
         } else {
+            LOG(WARNING) << "ASR result is null";
             response["text"] = "";
             response["error"] = "Recognition failed";
             response["mode"] = "offline";
@@ -229,10 +244,10 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             response["wav_name"] = wav_name;
         }
         
-        // Clean up decoder handle
-        if (decoder_handle) {
-            FunASRWfstDecoderUninit(decoder_handle);
-        }
+        // Clean up decoder handle (currently not used)
+        // if (decoder_handle) {
+        //     FunASRWfstDecoderUninit(decoder_handle);
+        // }
         
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -257,18 +272,13 @@ void HttpAsrServer::Start(const std::string& host, int port) {
         throw std::runtime_error("ASR model not initialized");
     }
     
-    // Set up routes
-    server->Post("/recognize", [this](const httplib::Request& req, httplib::Response& res) {
+    // Set up single endpoint that clients use
+    server->Post("/transcribe/normal", [this](const httplib::Request& req, httplib::Response& res) {
         handle_recognize(req, res);
     });
     
-    // Health check endpoint
-    server->Get("/health", [](const httplib::Request& req, httplib::Response& res) {
-        res.set_content("{\"status\":\"ok\"}", "application/json");
-    });
-    
-    // CORS preflight
-    server->Options("/recognize", [](const httplib::Request& req, httplib::Response& res) {
+    // CORS preflight for main endpoint
+    server->Options("/transcribe/normal", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Access-Control-Allow-Methods", "POST, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type");

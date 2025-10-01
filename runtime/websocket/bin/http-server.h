@@ -47,8 +47,6 @@ private:
     int thread_num = 8;
     int decoder_thread_num = 8;
     
-    // Base64 decode helper
-    std::vector<unsigned char> base64_decode(const std::string& encoded_string);
     
     // Handle recognition request
     void handle_recognize(const httplib::Request& req, httplib::Response& res);
