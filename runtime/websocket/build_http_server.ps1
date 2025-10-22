@@ -25,22 +25,77 @@ if (-not (Test-Path $CMAKE_FILE)) {
     exit 1
 }
 
-# Run CMake
+# Run CMake with appropriate generator
+Write-Host ""
 Write-Host "Running CMake..." -ForegroundColor Yellow
-cmake $SCRIPT_DIR
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "CMake configuration failed!" -ForegroundColor Red
+Write-Host "Detecting available generator..." -ForegroundColor Cyan
+
+$USE_MINGW = $false
+$CMAKE_SUCCESS = $false
+
+# Try MinGW first
+$gccExists = Get-Command gcc -ErrorAction SilentlyContinue
+if ($gccExists) {
+    Write-Host "Found MinGW GCC, using MinGW Makefiles generator..." -ForegroundColor Green
+    cmake -G "MinGW Makefiles" $SCRIPT_DIR
+    if ($LASTEXITCODE -eq 0) {
+        $USE_MINGW = $true
+        $CMAKE_SUCCESS = $true
+    }
+}
+
+# Try Visual Studio generators if MinGW failed or not available
+if (-not $CMAKE_SUCCESS) {
+    Write-Host "Trying Visual Studio generators..." -ForegroundColor Cyan
+
+    # Try VS 2022
+    cmake -G "Visual Studio 17 2022" -A x64 $SCRIPT_DIR 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Using Visual Studio 2022 generator" -ForegroundColor Green
+        $CMAKE_SUCCESS = $true
+    } else {
+        # Try VS 2019
+        cmake -G "Visual Studio 16 2019" -A x64 $SCRIPT_DIR 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Using Visual Studio 2019 generator" -ForegroundColor Green
+            $CMAKE_SUCCESS = $true
+        } else {
+            # Try VS 2017
+            cmake -G "Visual Studio 15 2017" -A x64 $SCRIPT_DIR 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Using Visual Studio 2017 generator" -ForegroundColor Green
+                $CMAKE_SUCCESS = $true
+            }
+        }
+    }
+}
+
+if (-not $CMAKE_SUCCESS) {
+    Write-Host ""
+    Write-Host "Error: No suitable compiler found!" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Please install one of the following:" -ForegroundColor Yellow
+    Write-Host "  1. MinGW-w64: https://www.mingw-w64.org/" -ForegroundColor White
+    Write-Host "  2. Visual Studio with C++ tools: https://visualstudio.microsoft.com/" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Or run this script from 'Developer PowerShell for VS'" -ForegroundColor Yellow
     exit 1
 }
 
 # Build the project
+Write-Host ""
 Write-Host "Building project..." -ForegroundColor Yellow
 $NUM_PROCESSORS = $env:NUMBER_OF_PROCESSORS
 if (-not $NUM_PROCESSORS) {
     $NUM_PROCESSORS = 4
 }
 
-cmake --build . --config Release --parallel $NUM_PROCESSORS
+if ($USE_MINGW) {
+    mingw32-make -j$NUM_PROCESSORS
+} else {
+    cmake --build . --config Release --parallel $NUM_PROCESSORS
+}
+
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Build failed!" -ForegroundColor Red
     exit 1
