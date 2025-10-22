@@ -19,6 +19,18 @@ Write-Host "Source directory: $SCRIPT_DIR"
 Write-Host "Build directory: $BUILD_DIR"
 Write-Host "ONNX Runtime: $ONNXRUNTIME_DIR"
 
+# Fix C++ "and" keyword for Windows MSVC
+Write-Host "`nFixing C++ syntax for Windows..." -ForegroundColor Yellow
+$cppFile = Join-Path $SCRIPT_DIR "..\onnxruntime\src\ct-transformer-online.cpp"
+if (Test-Path $cppFile) {
+    $content = Get-Content $cppFile -Raw
+    if ($content -match '\band\b') {
+        $content = $content -replace '\band\b', '&&'
+        Set-Content -Path $cppFile -Value $content -NoNewline
+        Write-Host "Fixed 'and' keyword" -ForegroundColor Green
+    }
+}
+
 # Check if httplib.h exists
 $HTTPLIB_FILE = Join-Path $SCRIPT_DIR "third_party\httplib.h"
 if (-not (Test-Path $HTTPLIB_FILE)) {
@@ -58,6 +70,7 @@ cmake -G Ninja `
     -DCMAKE_C_COMPILER=cl `
     -DCMAKE_CXX_COMPILER=cl `
     -DONNXRUNTIME_DIR="$ONNXRUNTIME_DIR" `
+    -DFFMPEG_DIR="" `
     $OPENSSL_ARG `
     $SCRIPT_DIR
 
