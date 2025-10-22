@@ -48,10 +48,15 @@ if ($VCPKG_ROOT) {
 }
 
 # Use Ninja generator (works with VS Developer PowerShell)
-Write-Host "Using Ninja generator..." -ForegroundColor Green
+Write-Host "Using Ninja generator with x64 architecture..." -ForegroundColor Green
+
+# Set environment to force x64 compilation
+$env:VSCMD_ARG_TGT_ARCH = "x64"
 
 cmake -G Ninja `
     -DCMAKE_BUILD_TYPE=Release `
+    -DCMAKE_C_COMPILER=cl `
+    -DCMAKE_CXX_COMPILER=cl `
     -DONNXRUNTIME_DIR="$ONNXRUNTIME_DIR" `
     $OPENSSL_ARG `
     $SCRIPT_DIR
@@ -72,18 +77,33 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "`nCMake configuration successful!" -ForegroundColor Green
 
-# Build with Ninja
+# Build with Ninja (only show errors)
 Write-Host "`nBuilding project with Ninja..." -ForegroundColor Yellow
+Write-Host "This may take a few minutes. Only errors will be shown..." -ForegroundColor Gray
+
 $NUM_PROCESSORS = $env:NUMBER_OF_PROCESSORS
 if (-not $NUM_PROCESSORS) {
     $NUM_PROCESSORS = 4
 }
 
-ninja -j $NUM_PROCESSORS
-
+# Capture output and only show errors
+$output = ninja -j $NUM_PROCESSORS 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "`nBuild failed!" -ForegroundColor Red
+    Write-Host "`nBuild failed! Errors:" -ForegroundColor Red
+    # Show only error lines
+    $output -split "`n" | Where-Object {
+        $_ -match "error" -or
+        $_ -match "fatal" -or
+        $_ -match "failed" -or
+        $_ -match "LNK\d+" -or
+        $_ -match "无法解析" -or
+        $_ -match "冲突"
+    } | ForEach-Object {
+        Write-Host $_ -ForegroundColor Red
+    }
     exit 1
+} else {
+    Write-Host "Build successful!" -ForegroundColor Green
 }
 
 Write-Host "`n========================================" -ForegroundColor Green
