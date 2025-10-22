@@ -87,6 +87,8 @@ cmake -G Ninja `
     -DCMAKE_CXX_COMPILER=cl `
     -DONNXRUNTIME_DIR="$ONNXRUNTIME_DIR" `
     -DFFMPEG_DIR="" `
+    -DENABLE_FST=OFF `
+    -DENABLE_GLOG=OFF `
     $OPENSSL_ARG `
     $SCRIPT_DIR
 
