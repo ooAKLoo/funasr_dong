@@ -81,6 +81,10 @@ Write-Host "Using Ninja generator with x64 architecture..." -ForegroundColor Gre
 # Set environment to force x64 compilation
 $env:VSCMD_ARG_TGT_ARCH = "x64"
 
+# Remove conda paths from CMAKE_PREFIX_PATH to avoid finding wrong gflags
+$env:CMAKE_PREFIX_PATH = ""
+$env:CMAKE_IGNORE_PATH = "D:/code_app/anaconda"
+
 cmake -G Ninja `
     -DCMAKE_BUILD_TYPE=Release `
     -DCMAKE_C_COMPILER=cl `
@@ -91,6 +95,7 @@ cmake -G Ninja `
     -DENABLE_GLOG=ON `
     -DGFLAGS_BUILD_STATIC_LIBS=ON `
     -DGFLAGS_BUILD_SHARED_LIBS=OFF `
+    -DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF `
     $OPENSSL_ARG `
     $SCRIPT_DIR
 
