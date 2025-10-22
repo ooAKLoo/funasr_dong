@@ -47,7 +47,30 @@ if ($VCPKG_ROOT) {
     $OPENSSL_ARG = "-DOPENSSL_ROOT_DIR=$VCPKG_ROOT\installed\x64-windows"
 }
 
-cmake -G "Visual Studio 16 2019" -A x64 `
+# Detect Visual Studio version
+$vsVersions = @(
+    @{Name = "Visual Studio 17 2022"; Year = 2022},
+    @{Name = "Visual Studio 16 2019"; Year = 2019},
+    @{Name = "Visual Studio 15 2017"; Year = 2017}
+)
+
+$selectedGenerator = $null
+foreach ($vs in $vsVersions) {
+    Write-Host "Trying $($vs.Name)..." -ForegroundColor Cyan
+    $testResult = cmake -G "$($vs.Name)" --help 2>&1 | Select-String "does not support" -Quiet
+    if (-not $testResult) {
+        $selectedGenerator = $vs.Name
+        Write-Host "Using generator: $selectedGenerator" -ForegroundColor Green
+        break
+    }
+}
+
+if (-not $selectedGenerator) {
+    Write-Host "No suitable Visual Studio generator found!" -ForegroundColor Red
+    exit 1
+}
+
+cmake -G $selectedGenerator -A x64 `
     -DONNXRUNTIME_DIR="$ONNXRUNTIME_DIR" `
     -DCMAKE_BUILD_TYPE=Release `
     $OPENSSL_ARG `
