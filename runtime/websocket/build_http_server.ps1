@@ -32,12 +32,12 @@ if (Test-Path "CMakeCache.txt") {
     Remove-Item "CMakeFiles" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-# Run CMake - let it auto-detect
+# Run CMake with Visual Studio generator
 Write-Host ""
 Write-Host "Running CMake..." -ForegroundColor Yellow
 
-# Force x64 architecture on Windows
-cmake -A x64 $SCRIPT_DIR
+# Force Visual Studio generator with x64 architecture
+cmake -G "Visual Studio 17 2022" -A x64 $SCRIPT_DIR
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
