@@ -19,15 +19,31 @@ Write-Host "Source directory: $SCRIPT_DIR"
 Write-Host "Build directory: $BUILD_DIR"
 Write-Host "ONNX Runtime: $ONNXRUNTIME_DIR"
 
-# Fix C++ "and" keyword for Windows MSVC
+# Fix C++ syntax issues for Windows
 Write-Host "`nFixing C++ syntax for Windows..." -ForegroundColor Yellow
-$cppFile = Join-Path $SCRIPT_DIR "..\onnxruntime\src\ct-transformer-online.cpp"
-if (Test-Path $cppFile) {
-    $content = Get-Content $cppFile -Raw
+
+# Fix 1: Replace "and" with "&&"
+$cppFile1 = Join-Path $SCRIPT_DIR "..\onnxruntime\src\ct-transformer-online.cpp"
+if (Test-Path $cppFile1) {
+    $content = Get-Content $cppFile1 -Raw
     if ($content -match '\band\b') {
         $content = $content -replace '\band\b', '&&'
-        Set-Content -Path $cppFile -Value $content -NoNewline
-        Write-Host "Fixed 'and' keyword" -ForegroundColor Green
+        Set-Content -Path $cppFile1 -Value $content -NoNewline
+        Write-Host "Fixed 'and' keyword in ct-transformer-online.cpp" -ForegroundColor Green
+    }
+}
+
+# Fix 2: Disable FFmpeg in audio.cpp for Windows
+$cppFile2 = Join-Path $SCRIPT_DIR "..\onnxruntime\src\audio.cpp"
+if (Test-Path $cppFile2) {
+    $content = Get-Content $cppFile2 -Raw
+    # Change the condition to exclude Windows from FFmpeg requirement
+    $oldPattern = '#if defined\(__APPLE__\)'
+    $newPattern = '#if defined(__APPLE__) || defined(_WIN32)'
+    if ($content -match [regex]::Escape($oldPattern)) {
+        $content = $content -replace [regex]::Escape($oldPattern), $newPattern
+        Set-Content -Path $cppFile2 -Value $content -NoNewline
+        Write-Host "Disabled FFmpeg requirement in audio.cpp" -ForegroundColor Green
     }
 }
 
