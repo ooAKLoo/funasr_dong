@@ -36,8 +36,8 @@ if (Test-Path "CMakeCache.txt") {
 Write-Host ""
 Write-Host "Running CMake..." -ForegroundColor Yellow
 
-# Force Visual Studio generator with x64 architecture
-cmake -G "Visual Studio 17 2022" -A x64 $SCRIPT_DIR
+# Use Visual Studio 2019 generator with x64 architecture
+cmake -G "Visual Studio 16 2019" -A x64 $SCRIPT_DIR
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
