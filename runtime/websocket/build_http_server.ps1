@@ -36,7 +36,8 @@ if (Test-Path "CMakeCache.txt") {
 Write-Host ""
 Write-Host "Running CMake..." -ForegroundColor Yellow
 
-cmake $SCRIPT_DIR
+# Force x64 architecture on Windows
+cmake -A x64 $SCRIPT_DIR
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
