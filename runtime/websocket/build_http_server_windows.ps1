@@ -38,12 +38,12 @@ $cppFile2 = Join-Path $SCRIPT_DIR "..\onnxruntime\src\audio.cpp"
 if (Test-Path $cppFile2) {
     $content = Get-Content $cppFile2 -Raw
     # Change the condition to exclude Windows from FFmpeg requirement
-    $oldPattern = '#if defined\(__APPLE__\)'
-    $newPattern = '#if defined(__APPLE__) || defined(_WIN32)'
-    if ($content -match [regex]::Escape($oldPattern)) {
-        $content = $content -replace [regex]::Escape($oldPattern), $newPattern
+    if ($content -match '#if defined\(__APPLE__\)') {
+        $content = $content -replace '#if defined\(__APPLE__\)', '#if defined(__APPLE__) || defined(_WIN32)'
         Set-Content -Path $cppFile2 -Value $content -NoNewline
         Write-Host "Disabled FFmpeg requirement in audio.cpp" -ForegroundColor Green
+    } else {
+        Write-Host "audio.cpp pattern not found or already fixed" -ForegroundColor Yellow
     }
 }
 
