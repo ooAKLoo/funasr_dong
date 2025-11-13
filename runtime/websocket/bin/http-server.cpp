@@ -62,25 +62,52 @@ void HttpAsrServer::InitAsr(const std::string& model_dir,
 
 void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Response& res) {
     auto start_time = std::chrono::high_resolution_clock::now();
-    
+
+    // Check concurrent request limit
+    int current_requests = active_requests.fetch_add(1);
+    if (current_requests >= max_concurrent_requests) {
+        active_requests.fetch_sub(1);
+        LOG(WARNING) << "Too many concurrent requests (" << current_requests << "), rejecting new request";
+        res.status = 503;  // Service Unavailable
+        res.set_content("{\"error\":\"Server busy, too many concurrent requests\"}", "application/json");
+        return;
+    }
+
+    // RAII wrapper for request counter cleanup
+    auto request_counter_guard = [this]() {
+        active_requests.fetch_sub(1);
+    };
+
+    // RAII wrapper for automatic result cleanup
+    FUNASR_RESULT result = nullptr;
+    auto result_guard = [&result]() {
+        if (result != nullptr) {
+            FunASRFreeResult(result);
+            result = nullptr;
+        }
+    };
+
     try {
         // Check if request has file upload
         auto file_iter = req.files.find("file");
         if (file_iter == req.files.end()) {
+            request_counter_guard();  // ✅ Cleanup counter
             res.status = 400;
             res.set_content("{\"error\":\"Missing audio file\"}", "application/json");
             return;
         }
-        
+
         const auto& file = file_iter->second;
         if (file.content.empty()) {
+            request_counter_guard();  // ✅ Cleanup counter
             res.status = 400;
             res.set_content("{\"error\":\"Empty audio file\"}", "application/json");
             return;
         }
-        
+
         // Get audio data directly from uploaded file
-        std::vector<char> audio_data(file.content.begin(), file.content.end());
+        // Use shared_ptr to ensure data lifetime during async processing
+        auto audio_data = std::make_shared<std::vector<char>>(file.content.begin(), file.content.end());
         
         // Extract parameters from form data
         std::string wav_format = "pcm"; // Default to pcm for direct processing
@@ -112,9 +139,9 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
         }
         
         LOG(INFO) << "Processing uploaded audio file: " << wav_name;
-        LOG(INFO) << "Audio size: " << audio_data.size() << " bytes, format: " << wav_format;
+        LOG(INFO) << "Audio size: " << audio_data->size() << " bytes, format: " << wav_format;
         LOG(INFO) << "Audio sample rate: " << audio_fs << "Hz";
-        
+
         // Process hotwords if provided
         std::vector<std::vector<float>> hotwords_embedding;
         if (!hotwords_str.empty()) {
@@ -125,59 +152,65 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 LOG(WARNING) << "Hotwords processing failed: " << e.what();
             }
         }
-        
+
         // Handle audio format - optimize for PCM direct processing
         if (wav_format == "pcm") {
             // PCM data is ready to use directly - zero overhead processing
-            LOG(INFO) << "Using direct PCM data (zero-copy), size: " << audio_data.size() << " bytes";
+            LOG(INFO) << "Using direct PCM data (zero-copy), size: " << audio_data->size() << " bytes";
         } else if (file.filename.find(".wav") != std::string::npos || wav_format == "wav") {
             // Handle legacy WAV format - extract PCM data if needed
-            if (audio_data.size() > 44) {
+            if (audio_data->size() > 44) {
                 // Check for WAV header
-                if (audio_data[0] == 'R' && audio_data[1] == 'I' && 
-                    audio_data[2] == 'F' && audio_data[3] == 'F') {
+                if ((*audio_data)[0] == 'R' && (*audio_data)[1] == 'I' &&
+                    (*audio_data)[2] == 'F' && (*audio_data)[3] == 'F') {
                     LOG(INFO) << "Detected WAV file, extracting PCM data...";
                     // Find "data" chunk
                     size_t data_start = 44; // Default WAV header size
-                    for (size_t i = 36; i < audio_data.size() - 8; i++) {
-                        if (audio_data[i] == 'd' && audio_data[i+1] == 'a' && 
-                            audio_data[i+2] == 't' && audio_data[i+3] == 'a') {
+                    for (size_t i = 36; i < audio_data->size() - 8; i++) {
+                        if ((*audio_data)[i] == 'd' && (*audio_data)[i+1] == 'a' &&
+                            (*audio_data)[i+2] == 't' && (*audio_data)[i+3] == 'a') {
                             data_start = i + 8; // Skip "data" + size field
                             break;
                         }
                     }
-                    audio_data.erase(audio_data.begin(), audio_data.begin() + data_start);
+                    audio_data->erase(audio_data->begin(), audio_data->begin() + data_start);
                     wav_format = "pcm"; // Now it's PCM data
-                    LOG(INFO) << "Extracted PCM data size: " << audio_data.size() << " bytes";
+                    LOG(INFO) << "Extracted PCM data size: " << audio_data->size() << " bytes";
                 }
             }
         }
-        
-        // Perform ASR inference
-        FUNASR_RESULT result = nullptr;
-        LOG(INFO) << "Starting ASR inference...";
-        try {
-            result = FunOfflineInferBuffer(
-                asr_handle, 
-                audio_data.data(), 
-                audio_data.size(),
-                RASR_NONE, 
-                nullptr, 
-                hotwords_embedding,
-                audio_fs, 
-                "pcm",  // Always pass PCM format to ASR engine
-                itn, 
-                nullptr,
-                svs_lang, 
-                svs_itn
-            );
-            LOG(INFO) << "ASR inference completed, result pointer: " << (result != nullptr ? "not null" : "null");
-        } catch (const std::exception& e) {
-            LOG(ERROR) << "ASR inference failed: " << e.what();
-            res.status = 500;
-            res.set_content("{\"error\":\"ASR inference failed\"}", "application/json");
-            return;
-        }
+
+        // Perform ASR inference with thread-safe locking
+        LOG(INFO) << "Starting ASR inference (waiting for lock)...";
+        {
+            std::lock_guard<std::mutex> lock(asr_mutex);  // ✅ Thread-safe access to ASR model
+            LOG(INFO) << "Lock acquired, running inference...";
+
+            try {
+                result = FunOfflineInferBuffer(
+                    asr_handle,
+                    audio_data->data(),
+                    audio_data->size(),
+                    RASR_NONE,
+                    nullptr,
+                    hotwords_embedding,
+                    audio_fs,
+                    "pcm",  // Always pass PCM format to ASR engine
+                    itn,
+                    nullptr,
+                    svs_lang,
+                    svs_itn
+                );
+                LOG(INFO) << "ASR inference completed, result pointer: " << (result != nullptr ? "not null" : "null");
+            } catch (const std::exception& e) {
+                LOG(ERROR) << "ASR inference failed: " << e.what();
+                result_guard();  // ✅ Cleanup before returning
+                request_counter_guard();  // ✅ Cleanup counter
+                res.status = 500;
+                res.set_content("{\"error\":\"ASR inference failed\"}", "application/json");
+                return;
+            }
+        }  // ✅ Lock released here
         
         // Prepare response
         nlohmann::json response;
@@ -186,16 +219,16 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                 std::string asr_result = FunASRGetResult(result, 0);
                 std::string timestamp = FunASRGetStamp(result);
                 std::string stamp_sents = FunASRGetStampSents(result);
-                
+
                 response["text"] = asr_result;
                 response["mode"] = "offline";
                 response["is_final"] = true;
                 response["wav_name"] = wav_name;
-                
+
                 if (!timestamp.empty()) {
                     response["timestamp"] = timestamp;
                 }
-                
+
                 if (!stamp_sents.empty()) {
                     try {
                         nlohmann::json json_stamp = nlohmann::json::parse(stamp_sents);
@@ -205,12 +238,11 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
                         response["stamp_sents"] = "";
                     }
                 }
-                
-                FunASRFreeResult(result);
-                
+
                 LOG(INFO) << "Recognition result: " << (asr_result.empty() ? "(empty)" : asr_result);
             } catch (const std::exception& e) {
                 LOG(ERROR) << "Result processing failed: " << e.what();
+                result_guard();  // ✅ Cleanup on error
                 response["text"] = "";
                 response["error"] = "Result processing failed";
             }
@@ -222,44 +254,80 @@ void HttpAsrServer::handle_recognize(const httplib::Request& req, httplib::Respo
             response["is_final"] = true;
             response["wav_name"] = wav_name;
         }
-        
+
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
         response["processing_time_ms"] = duration.count();
-        
+
         res.set_content(response.dump(), "application/json");
         res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Access-Control-Allow-Methods", "POST, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type");
-        
+
+        // ✅ Final cleanup - guaranteed to run
+        result_guard();
+        request_counter_guard();
+
     } catch (const std::exception& e) {
         LOG(ERROR) << "Unexpected error: " << e.what();
+        result_guard();  // ✅ Cleanup on exception
+        request_counter_guard();  // ✅ Cleanup counter
         res.status = 500;
         nlohmann::json error_response;
         error_response["error"] = "Internal server error";
         res.set_content(error_response.dump(), "application/json");
     }
+
+    LOG(INFO) << "Request completed, active requests: " << active_requests.load();
 }
 
 void HttpAsrServer::Start(const std::string& host, int port) {
     if (asr_handle == nullptr) {
         throw std::runtime_error("ASR model not initialized");
     }
-    
-    // Set up single endpoint that clients use
+
+    // Configure server timeouts to prevent hanging requests
+    server->set_read_timeout(60, 0);   // 60 seconds read timeout
+    server->set_write_timeout(60, 0);  // 60 seconds write timeout
+    server->set_idle_interval(5, 0);   // 5 seconds keep-alive interval
+
+    LOG(INFO) << "Server configured with 60s timeout per request";
+
+    // Health check endpoint - returns 200 OK if server is ready
+    server->Get("/health", [this](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json health_response;
+        health_response["status"] = "ok";
+        health_response["service"] = "FunASR HTTP Server";
+        health_response["ready"] = (asr_handle != nullptr);
+        res.set_content(health_response.dump(), "application/json");
+        res.set_header("Access-Control-Allow-Origin", "*");
+    });
+
+    // Root endpoint - returns service info (prevents 404 errors)
+    server->Get("/", [](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json info;
+        info["service"] = "FunASR HTTP Server";
+        info["version"] = "1.0";
+        info["endpoints"] = {"/transcribe/normal", "/health"};
+        res.set_content(info.dump(), "application/json");
+        res.set_header("Access-Control-Allow-Origin", "*");
+    });
+
+    // Set up main transcription endpoint
     server->Post("/transcribe/normal", [this](const httplib::Request& req, httplib::Response& res) {
         handle_recognize(req, res);
     });
-    
+
     // CORS preflight for main endpoint
     server->Options("/transcribe/normal", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Access-Control-Allow-Methods", "POST, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type");
     });
-    
+
     LOG(INFO) << "Starting HTTP server on " << host << ":" << port;
-    
+    LOG(INFO) << "Available endpoints: /, /health, /transcribe/normal";
+
     if (!server->listen(host, port)) {
         throw std::runtime_error("Failed to start HTTP server");
     }

@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 #include <thread>
+#include <mutex>
+#include <atomic>
 
 #include <glog/logging.h>
 #include "funasrruntime.h"
@@ -33,7 +35,7 @@ class HttpAsrServer {
 private:
     FUNASR_HANDLE asr_handle = nullptr;
     std::unique_ptr<httplib::Server> server;
-    
+
     // Model paths
     std::string model_dir;
     std::string vad_dir;
@@ -42,12 +44,17 @@ private:
     std::string punc_quant_dir;
     std::string itn_tagger_fst_dir;
     std::string itn_verbalizer_fst_dir;
-    
+
     // Configuration
     int thread_num = 8;
     int decoder_thread_num = 8;
-    
-    
+
+    // Concurrency control
+    std::mutex asr_mutex;  // Mutex for thread-safe ASR access
+    std::atomic<int> active_requests{0};
+    const int max_concurrent_requests = 4;  // Limit concurrent requests
+
+
     // Handle recognition request
     void handle_recognize(const httplib::Request& req, httplib::Response& res);
     
